@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSP Map Solver</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+
+        @media (min-width: 768px) {
+            .container {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .map-container {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        #map {
+            height: 500px;
+            border-radius: 4px;
+        }
+
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+
+        .location-list {
+            margin: 15px 0;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .location-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            background: #f8f8f8;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+
+        .location-item button {
+            background: #ff4444;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+
+        #result {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f0f8ff;
+            border-radius: 4px;
+            display: none;
+        }
+
+        .path-details {
+            margin-top: 10px;
+        }
+
+        .error {
+            color: red;
+            margin-top: 10px;
+        }
+
+        .instructions {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="map-container">
+            <h1>TSP Map Solver</h1>
+            <div class="instructions">
+                Click on the map to add locations. Add at least 3 locations to solve the TSP.
+            </div>
+            <div id="map"></div>
+        </div>
+
+        <div class="controls">
+            <h2>Selected Locations</h2>
+            <div class="location-list" id="locationList"></div>
+            
+            <div class="button-group">
+                <button onclick="clearLocations()">Clear All</button>
+                <button onclick="solveTSP()" id="solveButton" disabled>Solve TSP</button>
+            </div>
+            
+            <div id="result"></div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <script>
+        let map;
+        let markers = [];
+        let path = null;
+        
+        // Initialize map
+        function initMap() {
+            map = L.map('map').setView([0, 0], 2);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            map.on('click', onMapClick);
+        }
+
+        function onMapClick(e) {
+            const position = e.latlng;
+            addLocation(position);
+        }
+
+        function addLocation(position) {
+            const marker = L.marker(position).addTo(map);
+            const locationId = Date.now();
+            marker.locationId = locationId;
+            
+            markers.push({
+                id: locationId,
+                marker: marker,
+                position: position
+            });
+
+            updateLocationsList();
+            updateSolveButton();
+        }
+
+        function removeLocation(locationId) {
+            const index = markers.findIndex(m => m.id === locationId);
+            if (index !== -1) {
+                map.removeLayer(markers[index].marker);
+                markers.splice(index, 1);
+                updateLocationsList();
+                updateSolveButton();
+                clearPath();
+            }
+        }
+
+        function clearLocations() {
+            markers.forEach(m => map.removeLayer(m.marker));
+            markers = [];
+            updateLocationsList();
+            updateSolveButton();
+            clearPath();
+        }
+
+        function clearPath() {
+            if (path) {
+                map.removeLayer(path);
+                path = null;
+            }
+            document.getElementById('result').style.display = 'none';
+        }
+
+        function updateLocationsList() {
+            const list = document.getElementById('locationList');
+            list.innerHTML = markers.map((marker, index) => `
+                <div class="location-item">
+                    <span>Location ${index + 1}: (${marker.position.lat.toFixed(4)}, ${marker.position.lng.toFixed(4)})</span>
+                    <button onclick="removeLocation(${marker.id})">Remove</button>
+                </div>
+            `).join('');
+        }
+
+        function updateSolveButton() {
+            document.getElementById('solveButton').disabled = markers.length < 3;
+        }
+
+        async function solveTSP() {
+            try {
+                // Create distance matrix
+                const matrix = [];
+                for (let i = 0; i < markers.length; i++) {
+                    matrix[i] = [];
+                    for (let j = 0; j < markers.length; j++) {
+                        if (i === j) {
+                            matrix[i][j] = 0;
+                        } else {
+                            matrix[i][j] = Math.round(calculateDistance(
+                                markers[i].position,
+                                markers[j].position
+                            ) * 100) / 100; // Round to 2 decimal places
+                        }
+                    }
+                }
+
+                console.log('Sending matrix:', matrix); // Debug log
+
+                const response = await fetch('/solve', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ matrix })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server error: ${errorText}`);
+                }
+
+                const data = await response.json();
+                console.log('Received solution:', data); // Debug log
+
+                if (!data || !data.path) {
+                    throw new Error('Invalid solution format received from server');
+                }
+
+                displayResult(data);
+            } catch (error) {
+                console.error('TSP Solver Error:', error); // Debug log
+                document.getElementById('result').innerHTML = `
+                    <div class="error">Error solving TSP: ${error.message}</div>
+                `;
+                document.getElementById('result').style.display = 'block';
+            }
+        }
+
+
+        function calculateDistance(pos1, pos2) {
+            // Calculate Haversine distance between two points
+            const R = 6371; // Earth's radius in km
+            const dLat = toRad(pos2.lat - pos1.lat);
+            const dLon = toRad(pos2.lng - pos1.lng);
+            const lat1 = toRad(pos1.lat);
+            const lat2 = toRad(pos2.lat);
+
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.sin(dLon/2) * Math.sin(dLon/2) * Math.cos(lat1) * Math.cos(lat2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        function toRad(degrees) {
+            return degrees * Math.PI / 180;
+        }
+
+        function displayResult(result) {
+            if (path) {
+                map.removeLayer(path);
+            }
+
+            const pathCoordinates = result.path.map(i => markers[i].position);
+            path = L.polyline(pathCoordinates, {
+                color: 'red',
+                weight: 3,
+                opacity: 0.7
+            }).addTo(map);
+
+            document.getElementById('result').innerHTML = `
+                <h3>Solution Found!</h3>
+                <div class="path-details">
+                    <p><strong>Total Distance:</strong> ${result.distance.toFixed(2)} km</p>
+                    <p><strong>Path:</strong> ${result.path.map(i => `Location ${i + 1}`).join(' → ')}</p>
+                </div>
+            `;
+            document.getElementById('result').style.display = 'block';
+        }
+
+        // Initialize map when page loads
+        initMap();
+    </script>
+</body>
+</html>
